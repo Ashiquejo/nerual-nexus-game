@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Pixel Chicken Jump</title>
+  <style>
+    body {
+      background:#333;
+      color:#fff;
+      font-family:"Courier New", Courier, monospace;
+      display:flex;
+      justify-content:center;
+      align-items:center;
+      height:100vh;
+      margin:0;
+    }
+    #game-container {
+      border:4px solid #111;
+      box-shadow:0 0 0 4px #555;
+      background:#222;
+      padding:1rem;
+      position:relative;
+    }
+    canvas {
+      display:block;
+      background:#87CEEB;
+      border:4px solid #111;
+      image-rendering:pixelated;
+    }
+    #info, #controls, #instructions { text-align:center; }
+    #info { margin:0.5rem 0; }
+    #controls { margin-top:0.5rem; }
+    #instructions {
+      font-size:0.9rem;
+      padding:4px;
+      background:#444;
+      border:2px solid #111;
+      margin-bottom:0.5rem;
+    }
+    .pixel-button {
+      font-family:"Courier New", Courier, monospace;
+      font-size:1rem;
+      color:#fff;
+      background:#4CAF50;
+      border:3px solid #111;
+      padding:8px 16px;
+      cursor:pointer;
+      box-shadow:0 4px #111;
+      margin:0 5px;
+    }
+    .pixel-button:active { transform:translateY(2px); box-shadow:0 2px #111; }
+    #retryBtn { background:#f44336; }
+    #pauseBtn { background:#ff9800; }
+    #startBtn {
+      background:#2196F3;
+      position:absolute;
+      top:50%;
+      left:50%;
+      transform:translate(-50%,-50%);
+      font-size:1.4rem;
+      padding:16px 32px;
+    }
+    #sensitivityBox { margin-top:6px; }
+    input[type=range]{ width:150px; }
+
+    /* ===== Victory Modal ===== */
+    #victoryModal {
+      display:none;
+      position:fixed;
+      top:0; left:0;
+      width:100%; height:100%;
+      background:rgba(0,0,0,0.7);
+      display:flex;
+      justify-content:center;
+      align-items:center;
+      z-index:1000;
+    }
+    #victoryContent {
+      background:#222;
+      color:#fff;
+      padding:20px;
+      border:4px solid #111;
+      font-family:"Courier New", monospace;
+      text-align:center;
+      box-shadow:0 0 20px #000;
+    }
+    #victoryContent h2 {
+      margin-top:0;
+      color:#90EE90;
+    }
+  </style>
+</head>
+<body>
+  <div id="game-container">
+    <div id="instructions">
+      <b>Controls:</b> Space / Click / Yell = Jump • P = Pause • R = Retry<br>
+      Goal: Reach 5 points to win 🎯
+    </div>
+    <div id="info">
+      <h2>Pixel Chicken Jump 🐔</h2>
+      <p id="status" style="color:#90EE90;">Click "Start Mic" to enable voice control.</p>
+      <p>High Score: <b id="highScore">0</b></p>
+    </div>
+    <canvas id="game" width="800" height="400"></canvas>
+    <div id="controls">
+      <button id="micBtn" class="pixel-button">Start Mic</button>
+      <div id="sensitivityBox" style="display:none;">
+        <label>Sensitivity:
+          <span id="sensVal">1.6</span>
+        </label><br>
+        <input id="sensSlider" type="range" min="0.8" max="3" step="0.1" value="1.6">
+      </div>
+      <button id="pauseBtn" class="pixel-button">Pause</button>
+      <button id="retryBtn" class="pixel-button" style="display:none;">Retry</button>
+    </div>
+    <button id="startBtn" class="pixel-button">Start Game</button>
+  </div>
+
+  <!-- ===== Victory Modal ===== -->
+  <div id="victoryModal" style="display:none;">
+    <div id="victoryContent">
+      <h2>🎉 YOU WON HERE 🎉</h2>
+      <p>Here is your next hint: <b>...you witness the game's creation...</br>... its story spoken 90% by human voices...</b></p>
+      <button onclick="document.getElementById('victoryModal').style.display='none'" class="pixel-button">OK</button>
+    </div>
+  </div>
+
+<script>
+/* ===== Game constants ===== */
+const canvas=document.getElementById("game"), ctx=canvas.getContext("2d");
+const W=canvas.width, H=canvas.height;
+const CHICKEN_SIZE=40;
+const FLOOR_Y=H-50;
+const GROUND_LEVEL=FLOOR_Y+CHICKEN_SIZE;
+
+/* ===== State ===== */
+let chicken,gravity,obstacles,obstacleTimer,obstacleSpeed,score,running,gameOver,isPaused,highScore,clouds,gameStarted;
+
+/* ===== Audio ===== */
+const audioCtx=new(window.AudioContext||window.webkitAudioContext)();
+function playTone(f,d=0.1){
+ if(audioCtx.state==="suspended") audioCtx.resume();
+ const o=audioCtx.createOscillator(),g=audioCtx.createGain();
+ o.frequency.value=f; o.type="square";
+ g.gain.setValueAtTime(0.08,audioCtx.currentTime);
+ g.gain.exponentialRampToValueAtTime(0.00001,audioCtx.currentTime+d);
+ o.connect(g); g.connect(audioCtx.destination); o.start(); o.stop(audioCtx.currentTime+d);
+}
+const playJump=()=>playTone(800);
+const playCollision=()=>playTone(150,0.3);
+const playVictory=()=>playTone(1200,0.5);
+const playScore=()=>playTone(1000);
+
+/* ===== Init ===== */
+function initState(){
+ chicken={x:100,y:FLOOR_Y,w:CHICKEN_SIZE,h:CHICKEN_SIZE,vy:0,isJumping:false,wingPhase:0};
+ gravity=0.7;
+ obstacles=[];
+ obstacleTimer=0;
+ obstacleSpeed=4;
+ score=0; running=true; gameOver=false; isPaused=false; gameStarted=false;
+ highScore=parseInt(localStorage.getItem("pixelChickenHighScore"),10)||0;
+ document.getElementById("highScore").textContent=highScore;
+ clouds=[{x:100,y:100,w:80},{x:400,y:60,w:120},{x:700,y:120,w:100}];
+}
+
+/* ===== Draw ===== */
+function drawChicken(){
+ const c=chicken;
+ ctx.fillStyle="#FFD54F"; ctx.fillRect(c.x,c.y,c.w,c.h);
+ // beak
+ ctx.fillStyle="#FF9800"; ctx.fillRect(c.x+c.w-8,c.y+c.h/2-3,8,6);
+ // eye
+ ctx.fillStyle="#000"; ctx.fillRect(c.x+Math.floor(c.w/2),c.y+10,4,4);
+ // wings flap only when jumping
+ if(c.isJumping){
+   c.wingPhase+=0.2;
+   const offset=Math.sin(c.wingPhase)*5;
+   ctx.fillStyle="#FFC107";
+   ctx.fillRect(c.x+5,c.y+10+offset,8,12);
+   ctx.fillRect(c.x+c.w-13,c.y+10-offset,8,12);
+ }
+}
+function drawObstacle(ob){
+ const y=GROUND_LEVEL-ob.h;
+ ctx.fillStyle="#4CAF50";
+ ctx.fillRect(ob.x,y,ob.w,ob.h);
+ ctx.fillStyle="#388E3C";
+ ctx.fillRect(ob.x-5,y,ob.w+10,20);
+}
+function drawClouds(){
+ ctx.fillStyle="#FFF";
+ clouds.forEach(cl=>{ctx.fillRect(cl.x,cl.y,cl.w,20);ctx.fillRect(cl.x+20,cl.y-10,cl.w-40,40);});
+}
+
+/* ===== Logic ===== */
+function doJump(){ if(!chicken.isJumping && !gameOver){ chicken.vy=-14; chicken.isJumping=true; playJump(); } }
+function resetGame(){
+ initState(); gameStarted=true;
+ document.getElementById("status").textContent="Mic: idle";
+ document.getElementById("retryBtn").style.display="none";
+ document.getElementById("pauseBtn").textContent="Pause";
+ document.getElementById("pauseBtn").disabled=false;
+}
+function update(){
+ chicken.vy+=gravity; chicken.y+=chicken.vy;
+ if(chicken.y>=FLOOR_Y){ chicken.y=FLOOR_Y; chicken.vy=0; chicken.isJumping=false; }
+ clouds.forEach(cl=>{cl.x-=obstacleSpeed*0.2; if(cl.x+cl.w<-50) cl.x=W+Math.random()*100;});
+ obstacleTimer++;
+ if(obstacleTimer>120/(obstacleSpeed/5)){
+   obstacleTimer=0; obstacles.push({x:W,w:40,h:30+Math.random()*40});
+ }
+ for(let i=obstacles.length-1;i>=0;i--){
+   let ob=obstacles[i]; ob.x-=obstacleSpeed;
+   if(ob.x+ob.w<0){ obstacles.splice(i,1); score++; playScore();
+     if(score>highScore){ highScore=score; document.getElementById("highScore").textContent=highScore;
+       localStorage.setItem("pixelChickenHighScore",highScore); }
+     if(score>0 && score%3===0) obstacleSpeed+=0.2;
+   }
+ }
+ const r={x:chicken.x,y:chicken.y,w:chicken.w,h:chicken.h};
+ for(const ob of obstacles){
+   const or={x:ob.x,y:GROUND_LEVEL-ob.h,w:ob.w,h:ob.h};
+   if(r.x<or.x+or.w && r.x+r.w>or.x && r.y<or.y+or.h && r.y+r.h>or.y){
+     playCollision(); running=false; gameOver=true;
+     document.getElementById("status").textContent = `Game Over! Your score: ${score}`;
+     document.getElementById("retryBtn").style.display="inline-block";
+     document.getElementById("pauseBtn").disabled=true;
+   }
+ }
+ if(score>=5 && !gameOver){
+   playVictory(); running=false; gameOver=true;
+   document.getElementById("victoryModal").style.display="flex"; // show modal
+   document.getElementById("retryBtn").style.display="inline-block";
+   document.getElementById("pauseBtn").disabled=true;
+ }
+}
+function render(){
+ ctx.clearRect(0,0,W,H);
+ drawClouds();
+ ctx.fillStyle="#689F38"; ctx.fillRect(0,GROUND_LEVEL,W,H-GROUND_LEVEL);
+ ctx.fillStyle="#795548"; ctx.fillRect(0,GROUND_LEVEL+5,W,H-GROUND_LEVEL-5);
+ drawChicken(); if(gameStarted) obstacles.forEach(drawObstacle);
+ ctx.fillStyle="#fff"; ctx.strokeStyle="#000"; ctx.lineWidth=4;
+ ctx.font='24px "Courier New"'; ctx.strokeText("Score: "+score,10,30);
+ ctx.fillText("Score: "+score,10,30);
+ if(isPaused){
+   ctx.fillStyle="rgba(0,0,0,0.5)"; ctx.fillRect(0,0,W,H);
+   ctx.fillStyle="#fff"; ctx.font='60px "Courier New"'; ctx.textAlign="center";
+   ctx.strokeText("PAUSED",W/2,H/2); ctx.fillText("PAUSED",W/2,H/2); ctx.textAlign="left";
+ }
+}
+function loop(){ if(gameStarted && !isPaused && running) update(); render(); requestAnimationFrame(loop); }
+
+/* ===== Mic ===== */
+let micEnabled=false,micStream=null,baseline=0,lastJumpTime=0,calibrating=true,calFrames=0;
+let sens=1.6;
+const minThreshold=25,cooldown=500;
+async function toggleMic(){
+ if(!micEnabled){
+   try{
+     const s=await navigator.mediaDevices.getUserMedia({audio:true});
+     micStream=s; if(audioCtx.state==="suspended") await audioCtx.resume();
+     const src=audioCtx.createMediaStreamSource(s),an=audioCtx.createAnalyser();
+     an.fftSize=512; const data=new Uint8Array(an.frequencyBinCount);
+     src.connect(an); micEnabled=true; baseline=0;calFrames=0;calibrating=true;
+     document.getElementById("status").textContent="Mic: Calibrating...";
+     document.getElementById("micBtn").textContent="Stop Mic";
+     document.getElementById("sensitivityBox").style.display="block";
+     function detect(){
+       if(!micEnabled)return;
+       if(gameOver) return; // stop detection when game ends
+       an.getByteFrequencyData(data);
+       let avg=data.reduce((a,b)=>a+b,0)/data.length;
+       const now=Date.now();
+       if(calibrating){
+         baseline=baseline*0.9+avg*0.1; calFrames++;
+         if(calFrames>60){ calibrating=false; document.getElementById("status").textContent="Mic: Listening"; }
+       }else{
+         if(avg>baseline*sens && avg>minThreshold && now-lastJumpTime>cooldown){
+           doJump(); lastJumpTime=now;
+         }else baseline=baseline*0.995+avg*0.005;
+         if(!gameOver){
+           document.getElementById("status").textContent=now-lastJumpTime<cooldown?"Mic: Cooldown":"Mic: Listening";
+         }
+       }
+       requestAnimationFrame(detect);
+     }
+     detect();
+   }catch(e){ document.getElementById("status").textContent="Mic error: "+e.message; }
+ }else{
+   stopMic();
+ }
+}
+function stopMic(){
+ if(micStream) micStream.getTracks().forEach(t=>t.stop());
+ micStream=null; micEnabled=false;
+ document.getElementById("status").textContent="Mic: stopped";
+ document.getElementById("micBtn").textContent="Start Mic";
+ document.getElementById("sensitivityBox").style.display="none";
+}
+
+/* ===== Controls ===== */
+window.addEventListener("keydown",e=>{
+ if(e.code==="Space"&&gameStarted) doJump();
+ if(e.code==="KeyP"&&gameStarted&&!gameOver){ isPaused=!isPaused;
+   document.getElementById("pauseBtn").textContent=isPaused?"Resume":"Pause";
+   document.getElementById("status").textContent=isPaused?"Game Paused":(micEnabled?"Mic: Listening":"Mic: idle");
+ }
+ if(e.code==="KeyR"&&gameOver) resetGame();
+});
+canvas.addEventListener("mousedown",()=>{if(gameStarted)doJump();});
+document.getElementById("startBtn").addEventListener("click",()=>{
+ gameStarted=true;
+ document.getElementById("startBtn").style.display="none";
+});
+document.getElementById("micBtn").addEventListener("click",toggleMic);
+document.getElementById("retryBtn").addEventListener("click",resetGame);
+document.getElementById("pauseBtn").addEventListener("click",()=>{
+ if(gameOver||!gameStarted)return;
+ isPaused=!isPaused;
+ document.getElementById("pauseBtn").textContent=isPaused?"Resume":"Pause";
+ document.getElementById("status").textContent=isPaused?"Game Paused":(micEnabled?"Mic: Listening":"Mic: idle");
+});
+document.getElementById("sensSlider").addEventListener("input",e=>{
+ sens=parseFloat(e.target.value);
+ document.getElementById("sensVal").textContent=sens.toFixed(1);
+});
+
+/* ===== Start ===== */
+initState(); loop();
+</script>
+</body>
+</html>
