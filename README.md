@@ -25,6 +25,6 @@ This project was developed with the assistance of ChatGPT for conceptualization,
 
 ## ▶️ How to Play
 
-- **Goal:** Score 5 points to win and reveal the clue.
+- **Goal:** Score 5 points to win and reveal the clue.(That can be Edited)
 - **Controls:** Use the **Spacebar**, **click the mouse**, or **yell** into your microphone to jump over obstacles.
 - **Mic Setup:** Click "Start Mic" to enable voice controls.
